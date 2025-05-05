@@ -89,22 +89,25 @@ def calculate_signal_strength(distance, frequency, power):
 # Connect to the ArcGIS Pro project
 if os.path.basename(sys.executable) in ['ArcGISPro.exe', 'ArcSOC.exe']:
     aprx = arcpy.mp.ArcGISProject("CURRENT")
+    frequency = arcpy.GetParameter(1) # MHz
+    power = arcpy.GetParameter(2) # watts
+    txgain = arcpy.GetParameter(3) # dBi
+    rxgain = arcpy.GetParameter(4) # dBi
 else:   # for testing
-    aprx = arcpy.mp.ArcGISProject(R"C:\Users\chrism\OneDrive - Esri\ArcGIS_Pro_Projects\TFGP_data_model\TFGP_data_model_31.aprx")
+    aprx = arcpy.mp.ArcGISProject(R"C:\Users\chrism\OneDrive - Esri\ArcGIS_Pro_Projects\MyRFScanning\MyRFScanning.aprx")
+    frequency = 853.2625 # MHz
+    power = 100 # watts
+    txgain = 0
+    rxgain = 0
 
-# Get the feature layer
+# Get the input "links" feature layer, 
 if arcpy.GetParameter(0):                            
     layer = arcpy.GetParameter(0)                    
 else:                                                
-    layer = aprx.listMaps("tsmo-dev1")[0].listLayers("links")[0]
+    layer = aprx.listMaps("Map")[0].listLayers("antenna_points")[0]
     
-# desc = arcpy.Describe(layer)
-# arcpy.env.workspace = 'C:\\Users\\chrism\\OneDrive - Esri\\ArcGIS_Pro_Projects\\TFGP_mock_up_data_3\\PostgreSQL-tsmo-dev3-tsmotfgp(tsmodataowner).sde'
-# arcpy.AddMessage(f"Layer:{layer}")
 features_dict = {}     
 features_dict_params = {}                          
-frequency = arcpy.GetParameter(1) # MHz
-power = arcpy.GetParameter(2) # watts
 max_distance = 50
 
 for row in arcpy.da.SearchCursor(layer, ['SHAPE@','OID@']):
@@ -116,7 +119,7 @@ for row in arcpy.da.SearchCursor(layer, ['SHAPE@','OID@']):
         signal_strength = calculate_signal_strength(distance, frequency, power)
         features_dict[row[1]] = signal_strength                  #cmac added
         calc_params = f"distance (k): {round(distance,3)}; freq (MHz): {frequency}; power (W): {power}; txgain (dB): {arcpy.GetParameter(3)}; rxgain (dB): {arcpy.GetParameter(4)}"
-        features_dict_params[row[1]] = calc_params 
+        features_dict_params[row[1]] = calc_params.split(";")
     else:
         arcpy.AddMessage(f"The distance between the two locations is greater than {max_distance} kilometers. This model is only valid for distances less than {max_distance} kilometers.")
         arcpy.AddMessage(f"Distance: {distance}")
@@ -125,19 +128,35 @@ for row in arcpy.da.SearchCursor(layer, ['SHAPE@','OID@']):
 test_fields = arcpy.ListFields(layer)
 test_fields = [f.name for f in arcpy.ListFields(layer)]
 
+# check for fileds in the layer
+for fld in ['link_signal_db','link_distance','link_freq_mhz'  ,'link_power_watt'  ,'link_txgain_db'  ,'link_rxgain_db'  ]:
+    if fld not in test_fields:
+        arcpy.AddField_management(layer, fld, "DOUBLE")
+        arcpy.AddMessage(f"Adding field {fld} to {layer}")
+    
 for rid in features_dict:
     arcpy.AddMessage(f"features_dict: {features_dict}")
     arcpy.AddMessage(f"+++ Processing: {rid}:{features_dict[rid]}")
-    if 'signal_db' in test_fields:
-        expression = arcpy.AddFieldDelimiters(layer, "objectid") + " = " + str(rid)
-        fields = ['signal_db','signal_db_params']
+    if 'link_signal_db' in test_fields:
+        expression = arcpy.AddFieldDelimiters(layer, "OID") + " = " + str(rid)
+        fields = ['link_signal_db','link_distance','link_freq_mhz'  ,'link_power_watt'  ,'link_txgain_db'  ,'link_rxgain_db'  ]
         with arcpy.da.UpdateCursor(layer, fields, where_clause=expression) as cursor:
             for row in cursor:
-                row[0] = round(features_dict[rid],0)
-                row[1] = features_dict_params[rid]
+                # row[0] = round(features_dict[rid],0)
+                # row[1] = features_dict_params[rid]
+                link_signal_db  = round(features_dict[rid],0)
+                link_distance   = float(features_dict_params[rid][0].split(" ")[-1])
+                link_freq_mhz   = float(features_dict_params[rid][1].split(" ")[-1])
+                link_power_watt = float(features_dict_params[rid][2].split(" ")[-1])
+                
+                
+                link_txgain_db  = float(features_dict_params[rid][3].split(" ")[-1]) if features_dict_params[rid][3].split(" ")[-1] != 'None' else 0
+                link_rxgain_db  = float(features_dict_params[rid][4].split(" ")[-1]) if features_dict_params[rid][4].split(" ")[-1] != 'None' else 0
+                new_row = [link_signal_db, link_distance, link_freq_mhz, link_power_watt, link_txgain_db, link_rxgain_db]
                 arcpy.AddMessage("Calculating OBJECTID {} signal_db = {}.".format(rid,row[0]))
                 sendMessage(f"{features_dict_params[rid]}",2)
-                cursor.updateRow(row)
+                cursor.updateRow(new_row)
+                
     elif 'Text' in test_fields:
         expression = arcpy.AddFieldDelimiters(layer, "objectid") + " = " + str(rid)
         fields = ['Text']
